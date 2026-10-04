@@ -38,14 +38,12 @@ def run(brain: LIFBrain, duration_ms: int, drive_idx: list[int], drive_level: fl
     spike_counts = torch.zeros(N)
     drive_raster = torch.zeros(duration_ms, len(drive_idx))
 
-    syn_current = torch.zeros(N, device=brain.device)
     drive_vec = torch.zeros(N, device=brain.device)
     if drive_idx:
         drive_vec[drive_idx] = drive_level
 
     for t in range(duration_ms):
-        spikes = brain.step(drive_vec + syn_current)
-        syn_current = brain.propagate(spikes)
+        spikes = brain.step(drive_vec)
         spike_counts += spikes.cpu()
         if drive_idx:
             drive_raster[t] = spikes.cpu()[drive_idx]
@@ -66,7 +64,7 @@ def describe_pop(label: str, counts: torch.Tensor, duration_ms: int, mask: torch
 def main():
     torch.manual_seed(0)
     print("[loading brain]")
-    brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams(syn_scale=0.01))
+    brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams())
     print(f"  N={brain.N:,}  nnz={brain.W.values().numel():,}  dt={brain.p.dt_ms} ms  tau_m={brain.p.tau_m_ms} ms")
 
     bundle = brain.bundle

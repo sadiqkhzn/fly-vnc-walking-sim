@@ -35,14 +35,13 @@ DURATION_MS = 1500
 
 def one_run(tau_ms: float, syn_scale: float, leg_to_idx: dict[str, list[int]], mdn_idx: list[int]) -> dict:
     torch.manual_seed(0)
-    brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams(tau_m_ms=tau_ms, syn_scale=syn_scale))
+    brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams(tau_m_ms=tau_ms, syn_scale_e=syn_scale, syn_scale_i=syn_scale))
     N = brain.N
     drive_vec = torch.zeros(N); drive_vec[mdn_idx] = 2.0
     per_leg_counts = {leg: np.zeros(DURATION_MS, dtype=np.int32) for leg in LEGS}
-    syn_current = torch.zeros(N)
     for t_ms in range(DURATION_MS):
-        inp = (drive_vec if t_ms >= STIM_START_MS else torch.zeros(N)) + syn_current
-        spikes = brain.step(inp); syn_current = brain.propagate(spikes)
+        inp = drive_vec if t_ms >= STIM_START_MS else torch.zeros(N)
+        spikes = brain.step(inp)
         for leg in LEGS:
             idxs = leg_to_idx[leg]
             if idxs: per_leg_counts[leg][t_ms] = int(spikes[idxs].sum().item())

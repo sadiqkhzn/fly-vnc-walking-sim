@@ -1,11 +1,10 @@
 """Pass 9: full closed loop smoke test. Brain spikes → fly actions.
 
 Pipeline per 1 ms LIF tick:
-  1. LIF.step(external_input)      → spikes (24,115,)
-  2. LIF.propagate(spikes)         → recurrent synaptic current for next tick
-  3. Bucket motor spikes into 42 channels (quick-and-dirty mapping — Pass 10
+  1. LIF.step(external_input)      → spikes (24,115,)  (recurrence internal)
+  2. Bucket motor spikes into 42 channels (quick-and-dirty mapping — Pass 10
      replaces this with a proper muscle→actuator mapping)
-  4. If 10 ms elapsed since last fly update, decode last-10ms spike buckets
+  3. If 10 ms elapsed since last fly update, decode last-10ms spike buckets
      into position deltas and run 10 fly substeps.
 
 This is NOT a validation experiment. It only confirms:
@@ -51,7 +50,7 @@ def build_motor_to_action_map(motor_indices: list[int], n_actuators: int, seed: 
 def main():
     torch.manual_seed(0)
     print("[loading brain]")
-    brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams(syn_scale=0.01))
+    brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams())
     bundle = brain.bundle
     mdn_idx = bundle["command_idx"]["MDN"]
     motor_indices = [i for ids in bundle["motor_idx_by_type"].values() for i in ids]
@@ -80,7 +79,6 @@ def main():
     duration_lif_ms = 400  # total LIF simulation
     stim_start_ms = 100
 
-    syn_current = torch.zeros(brain.N)
     recent_motor_spikes = deque(maxlen=MOTOR_WINDOW_MS)  # last N ms of motor spike-count tensors
 
     # Diagnostics
@@ -92,9 +90,8 @@ def main():
     t_wall = time.time()
     for t_ms in range(duration_lif_ms):
         # 1) brain step
-        inp = (drive_vec if t_ms >= stim_start_ms else torch.zeros(brain.N)) + syn_current
+        inp = drive_vec if t_ms >= stim_start_ms else torch.zeros(brain.N)
         spikes = brain.step(inp)
-        syn_current = brain.propagate(spikes)
 
         # 2) motor spike aggregation
         motor_spikes = spikes[motor_indices]

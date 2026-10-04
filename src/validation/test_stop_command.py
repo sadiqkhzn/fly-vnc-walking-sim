@@ -47,7 +47,7 @@ BIN_MS = 10
 def main():
     torch.manual_seed(0)
     print("[loading]")
-    brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams(syn_scale=0.01))
+    brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams())
     bundle = brain.bundle
     assign = pd.read_parquet(ASSIGN_PATH)
 
@@ -78,13 +78,11 @@ def main():
     print(f"\n[running] {PHASE_END} ms   baseline 0..{PHASE_BASELINE_END} | "
           f"MDN {PHASE_BASELINE_END}..{PHASE_MDN_END} | +DNp09 {PHASE_MDN_END}..{PHASE_END}")
     motor_counts_per_ms = np.zeros(PHASE_END, dtype=np.int32)
-    syn_current = torch.zeros(N)
 
     t0 = time.time()
     for t_ms in range(PHASE_END):
-        inp = drive_at(t_ms) + syn_current
+        inp = drive_at(t_ms)
         spikes = brain.step(inp)
-        syn_current = brain.propagate(spikes)
         motor_counts_per_ms[t_ms] = int(spikes[motor_indices].sum().item())
     print(f"  wall: {time.time()-t0:.1f}s ({PHASE_END/(time.time()-t0)/1000:.2f}x real-time)")
 

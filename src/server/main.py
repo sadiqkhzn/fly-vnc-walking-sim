@@ -65,7 +65,7 @@ class SimState:
 
     def load(self):
         print("[sim] loading brain + metadata")
-        self.brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams(syn_scale=0.01))
+        self.brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams())
         bundle = self.brain.bundle
         self.N = bundle["meta"]["n_neurons"]
         self.body_ids = bundle["body_ids"]
@@ -155,7 +155,6 @@ state = SimState()
 async def sim_loop():
     """Background: step the brain forever. Publishes every PUBLISH_EVERY_MS ms."""
     assert state.brain is not None
-    syn_current = torch.zeros(state.N)
     frame_buffer: list[int] = []
     tick_count = 0
     bench_t0 = time.perf_counter()
@@ -165,8 +164,7 @@ async def sim_loop():
         tick_start = time.perf_counter()
         with state.lock:
             drive = state.drive_vec
-        spikes = state.brain.step(drive + syn_current)
-        syn_current = state.brain.propagate(spikes)
+        spikes = state.brain.step(drive)
         state.t_ms += 1
         tick_count += 1
         bench_ticks += 1

@@ -1,23 +1,22 @@
-"""Build the signed sparse weight tensor consumed by the LIF sim.
+"""Build split W_exc, W_inh sparse weight tensors for the dual-τ LIF.
 
-Produces data/vnc_graph.pt:
-  weights_csr        torch sparse CSR, shape (N, N), float32
-                     W[i, j] = contribution to postsynaptic neuron i from
-                     presynaptic neuron j, signed by j's predicted NT (Dale's law)
+Produces data/vnc_graph.pt with:
+  w_exc_csr          torch sparse CSR, shape (N, N), float32
+                     W[i, j] = synapse count from j→i if j releases ACh, else 0
+  w_inh_csr          torch sparse CSR, shape (N, N), float32  (magnitude, not signed)
+                     W[i, j] = synapse count from j→i if j releases GABA/Glu, else 0
   body_ids           list[int], length N, body_ids[i] is the bodyId at index i
   id_to_idx          dict[int, int]
   command_idx        {name: [idx, ...]} for MDN, DNp09, DNa01, DNa02, DNb01
   motor_idx_by_type  {type_str: [idx, ...]}
   descending_idx     [idx, ...] for all DN cells
-  meta               dict of dataset, thresholds, sign table, counts
+  meta               dict of dataset, thresholds, nt table, counts
 
-Sign convention (Dale's law):
-  acetylcholine → +1      (fast excitatory)
-  gaba          → -1      (fast inhibitory)
-  glutamate     → -1      (inhibitory in fly VNC via GluCl, standard choice)
-  serotonin, dopamine, octopamine, histamine, unclear, None → 0
-      (neuromodulators / unresolved — not driving fast LIF membrane in v1;
-       can be added later with slower dynamics if validation needs them)
+Sign classification (Dale's law):
+  acetylcholine → excitatory
+  gaba          → inhibitory
+  glutamate     → inhibitory (fly VNC via GluCl, standard choice)
+  serotonin, dopamine, octopamine, histamine, unclear, None → modulatory → neither
 
 Self-loops are dropped. Deterministic: same cache → same output.
 """
@@ -35,28 +34,22 @@ from src.data.neuprint_client import fetch_vnc_subset
 
 OUT_PATH = Path(__file__).resolve().parent.parent / "data" / "vnc_graph.pt"
 
-# Signs = biology (Dale's law). Unit magnitude for E and I keeps the sign
-# interpretation unambiguous ("one synapse = one unit of signed drive"). An
-# earlier attempt with |I| = 2 improved steady-state rate balance but quenched
-# rhythms; see passes/10c and 10d. The honest baseline is 1:1 and the open
-# question of CPG phasing (which likely requires sensory feedback) is deferred
-# to the closed-loop milestone, not papered over here.
-NT_SIGN: dict[str, float] = {
-    "acetylcholine": +1.0,
-    "gaba": -1.0,
-    "glutamate": -1.0,
-    "serotonin": 0.0,
-    "dopamine": 0.0,
-    "octopamine": 0.0,
-    "histamine": 0.0,
-    "unclear": 0.0,
+NT_CLASS: dict[str, str] = {
+    "acetylcholine": "exc",
+    "gaba": "inh",
+    "glutamate": "inh",
+    "serotonin": "mod",
+    "dopamine": "mod",
+    "octopamine": "mod",
+    "histamine": "mod",
+    "unclear": "mod",
 }
 
 
-def _sign_for(nt) -> float:
+def _class_for(nt) -> str:
     if nt is None or (isinstance(nt, float) and np.isnan(nt)):
-        return 0.0
-    return NT_SIGN.get(str(nt).lower(), 0.0)
+        return "mod"
+    return NT_CLASS.get(str(nt).lower(), "mod")
 
 
 def main():
@@ -66,12 +59,9 @@ def main():
     N = len(body_ids)
     id_to_idx = {int(b): i for i, b in enumerate(body_ids)}
 
-    # Drop self-loops.
     self_loops = int((s.edges["pre"] == s.edges["post"]).sum())
     edges = s.edges[s.edges["pre"] != s.edges["post"]].copy()
 
-    # Sanity: every endpoint maps to an index. (Fetcher already enforces this; we
-    # re-check here because this script may run against an older cache.)
     missing_pre = ~edges["pre"].isin(id_to_idx)
     missing_post = ~edges["post"].isin(id_to_idx)
     assert not missing_pre.any() and not missing_post.any(), (
@@ -82,19 +72,29 @@ def main():
     post_idx = edges["post"].map(id_to_idx).to_numpy(dtype=np.int64)
     raw_w = edges["weight"].to_numpy(dtype=np.float32)
 
-    # Dale's law: sign of each edge is determined by the PREsynaptic cell's NT.
+    # Classify each edge by its PRESYNAPTIC neuron's NT (Dale's law).
     pre_nts = s.neurons.loc[edges["pre"].values, "nt"].to_numpy()
-    signs = np.array([_sign_for(nt) for nt in pre_nts], dtype=np.float32)
-    signed_w = raw_w * signs
+    classes = np.array([_class_for(nt) for nt in pre_nts])
 
-    # COO -> CSR. Rows = post (destination), cols = pre (source).
-    # coalesce() sums any duplicate (post, pre) pairs — rare but defensive.
-    coo = torch.sparse_coo_tensor(
-        indices=torch.from_numpy(np.vstack([post_idx, pre_idx])),
-        values=torch.from_numpy(signed_w),
-        size=(N, N),
-    ).coalesce()
-    csr = coo.to_sparse_csr()
+    exc_mask = classes == "exc"
+    inh_mask = classes == "inh"
+
+    def build_csr(mask):
+        if not mask.any():
+            return torch.sparse_coo_tensor(
+                torch.zeros((2, 0), dtype=torch.int64),
+                torch.zeros(0, dtype=torch.float32),
+                (N, N),
+            ).coalesce().to_sparse_csr()
+        coo = torch.sparse_coo_tensor(
+            torch.from_numpy(np.vstack([post_idx[mask], pre_idx[mask]])),
+            torch.from_numpy(raw_w[mask]),
+            (N, N),
+        ).coalesce()
+        return coo.to_sparse_csr()
+
+    W_exc = build_csr(exc_mask)
+    W_inh = build_csr(inh_mask)
 
     command_idx = {
         name: [id_to_idx[int(b)] for b in ids] for name, ids in s.command_ids.items()
@@ -104,13 +104,15 @@ def main():
     }
     descending_idx = [id_to_idx[int(b)] for b in s.descending_ids]
 
-    nnz = csr.values().numel()
-    frac_exc = float((signed_w > 0).sum()) / max(1, len(signed_w))
-    frac_inh = float((signed_w < 0).sum()) / max(1, len(signed_w))
-    frac_zero = float((signed_w == 0).sum()) / max(1, len(signed_w))
+    nnz_e = W_exc.values().numel()
+    nnz_i = W_inh.values().numel()
+    frac_exc = float(exc_mask.sum()) / max(1, len(edges))
+    frac_inh = float(inh_mask.sum()) / max(1, len(edges))
+    frac_mod = 1.0 - frac_exc - frac_inh
 
     bundle = {
-        "weights_csr": csr,
+        "w_exc_csr": W_exc,
+        "w_inh_csr": W_inh,
         "body_ids": body_ids.tolist(),
         "id_to_idx": id_to_idx,
         "command_idx": command_idx,
@@ -120,14 +122,15 @@ def main():
             "dataset": s.dataset,
             "weight_threshold": s.weight_threshold,
             "n_neurons": N,
-            "n_edges_coalesced": nnz,
+            "n_edges_exc": nnz_e,
+            "n_edges_inh": nnz_i,
             "n_edges_raw": len(edges),
             "self_loops_dropped": self_loops,
             "frac_excitatory": frac_exc,
             "frac_inhibitory": frac_inh,
-            "frac_zero_sign": frac_zero,
-            "nt_sign_table": NT_SIGN,
-            "sign_convention": "Dale's law (presynaptic NT determines sign of all outputs)",
+            "frac_modulatory": frac_mod,
+            "nt_class_table": NT_CLASS,
+            "sign_convention": "Dale's law; magnitudes stored, sign applied by LIF via dual conductances",
         },
     }
 
@@ -136,11 +139,10 @@ def main():
 
     print(f"wrote {OUT_PATH.relative_to(Path.cwd())}")
     print(f"  N neurons   : {N:,}")
-    print(f"  edges in    : {len(edges):,}   coalesced nnz: {nnz:,}")
     print(f"  self-loops dropped: {self_loops}")
-    print(f"  excitatory  : {frac_exc * 100:5.1f}%")
-    print(f"  inhibitory  : {frac_inh * 100:5.1f}%")
-    print(f"  zero sign   : {frac_zero * 100:5.1f}%  (modulators / unclear)")
+    print(f"  edges exc   : {nnz_e:>10,}   ({frac_exc * 100:5.1f}%)")
+    print(f"  edges inh   : {nnz_i:>10,}   ({frac_inh * 100:5.1f}%)")
+    print(f"  edges mod   : {int(frac_mod * len(edges)):>10,}   ({frac_mod * 100:5.1f}%)   (dropped from LIF)")
     print(f"  command neuron tensor indices:")
     for name, idxs in command_idx.items():
         print(f"    {name:8s} {idxs}")

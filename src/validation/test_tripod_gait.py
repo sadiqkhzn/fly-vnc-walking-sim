@@ -44,7 +44,7 @@ DURATION_MS = 2000  # 2 seconds total
 def main():
     torch.manual_seed(0)
     print("[loading]")
-    brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams(syn_scale=0.01))
+    brain = LIFBrain.from_bundle(GRAPH_PATH, params=LIFParams())
     bundle = brain.bundle
     assign = pd.read_parquet(MOTOR_ASSIGN_PATH)
 
@@ -70,13 +70,11 @@ def main():
     drive_vec[mdn_idx] = 2.0
 
     per_leg_counts_per_ms = {leg: np.zeros(DURATION_MS, dtype=np.int32) for leg in LEGS}
-    syn_current = torch.zeros(N)
 
     t0 = time.time()
     for t_ms in range(DURATION_MS):
-        inp = (drive_vec if t_ms >= STIM_START_MS else torch.zeros(N)) + syn_current
+        inp = drive_vec if t_ms >= STIM_START_MS else torch.zeros(N)
         spikes = brain.step(inp)
-        syn_current = brain.propagate(spikes)
         for leg in LEGS:
             idxs = leg_to_idx[leg]
             if idxs:

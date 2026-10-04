@@ -52,38 +52,44 @@ circuits are out of scope for v1.
 - A trained RL policy would beat it. That is not the point. The point is that
   the connectome, unchanged, reproduces published fly motor behavior.
 
-## Current status (as of Pass 10)
+## Current status (as of Pass 11)
 
 **Working end-to-end:**
 - Fetched 24,115 VNC + descending neurons from `male-cns:v1.0` (Sept 2026 release),
   1.77M weight ≥ 3 edges, 22.4M total synapses. Full bilateral symmetry (L=8472, R=8413).
-- Signed LIF sparse weight tensor (34 MB). Dale's law via `predictedNt`.
-  57.9% excitatory / 39.1% inhibitory, matching standard fly ratios.
-- Brain-only test (Pass 6): zero baseline, MDN drive → 334 Hz on MDN cells,
-  motor pool jumps 0 → 29.4 Hz, 37.5% of motor cells active. No pathology.
-- Closed loop (Pass 9): MDN drive → spikes → actuators → fly moves 1.17 mm in
-  400 ms. 15× slower than real-time on CPU.
-- NeuroMechFly bridge: 42 position-controlled actuators across 6 legs; standing
-  posture produces bilaterally symmetric foot forces matching known fly weight
-  distribution (hind > middle > front).
+- Dual-timeconstant conductance LIF (fast E, slow I). Split sparse tensors:
+  1,026,234 excitatory + 693,369 inhibitory edges. Dale's law via `predictedNt`.
+- Brain-only test: zero baseline, MDN drive → motor pool activates widely with
+  realistic 5–30 Hz rates and healthy sparseness (27% active).
+- Closed loop: MDN drive → spikes → actuators → fly walks (1.17 mm in 400 ms).
+- NeuroMechFly bridge: 42 position-controlled actuators, full 3D foot force
+  sensors, bilaterally symmetric standing posture matching fly biomechanics.
+- Live viewer: FastAPI + Three.js, 24k neurons as InstancedMesh, spike-driven
+  glow at 50 Hz, interactive drive controls.
 
-**Open scientific question flagged (Pass 10):**
-Validation 1 (tripod gait from tonic MDN) shows motor-pool oscillation (confirmed
-rhythm, not noise) but at 24–48 Hz rather than the expected 5–15 Hz, and both
-tripod groups fire co-actively (`r(A,B) = +0.20`) rather than anti-phase.
-Parameter sweeps over `tau_m ∈ {20, 50, 100} ms` and inhibition scale
-`∈ {1, 2}` did not find a point passing both frequency and phasing criteria.
+**Validation results (honest):**
 
-This matches published findings for insect-CPG simulations: reciprocal
-half-center oscillation typically requires **proprioceptive load feedback**
-to break hemisegment symmetry (Mantziaris et al. 2020). The brain-only
-simulation lacks this closed loop; both hemisegments receive identical
-descending drive and respond symmetrically.
+| Experiment | Verdict | Detail |
+|---|---|---|
+| V2 — MDN raises motor pool | ✅ PASS | 349× over baseline |
+| V2 — DNp09 suppression | ⚠️ PARTIAL | ratio 0.84 (16% suppression), with correct biological latency (25 ms). Full suppression requires shunting inhibition not representable in current-based point-neuron LIF. |
+| V2 — latency criterion | ✅ PASS | 25 ms, matches fly literature |
+| V1 — oscillation present | ✅ | rhythmic motor response, not noise |
+| V1 — tripod anti-phase | ❌ | brain-only sim cannot break hemisegment symmetry without proprioceptive feedback (Mantziaris 2020) |
 
-The project chooses to **document this transparently** rather than tune
-parameters to force a passing result. The next milestone is a closed sensory
-loop (foot-load → VNC sensory neurons) which is where the biology predicts
-anti-phase coordination should emerge.
+**Scientific stance:** we **document findings transparently** instead of tuning
+to force passes. The two open gaps map onto two concrete, well-defined next
+milestones:
+
+1. **Shunting inhibition** — upgrade LIF to a conductance-based model with
+   explicit reversal potentials. This is the standard next step beyond
+   current-based LIF (Dayan & Abbott Ch 5.4).
+2. **Closed sensory loop** — route the already-exposed `foot_force_vec`,
+   `foot_contact`, and `joint_angles` into chordotonal / campaniform sensory
+   neurons in the VNC. The sensors are wired through FlyBridge; what's left is
+   the encoding function and the appropriate sensory neuron body IDs.
+
+The connectome itself is never modified. The simulator is the thing we iterate on.
 
 ## Directory layout
 

@@ -41,7 +41,6 @@ def run_closed_loop(
 ):
     """`command_fn(t_ms) -> {command_name: drive}` lets callers inject experiment protocols."""
     obs = fly.reset()
-    syn_current = torch.zeros(brain.N, device=brain.device)
 
     for t in range(cfg.sim_ms):
         sens_current = sensory.encode(
@@ -51,9 +50,9 @@ def run_closed_loop(
         )
         desc_current = descending.drive(command_fn(t))
 
-        total_input = sens_current + desc_current + syn_current
+        # Only EXTERNAL inputs; the LIF handles recurrent synapses internally.
+        total_input = sens_current + desc_current
         spikes = brain.step(total_input)
-        syn_current = brain.propagate(spikes)
 
         motor.ingest(spikes)
         if on_spikes is not None:
