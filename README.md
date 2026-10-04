@@ -2,6 +2,8 @@
 
 **Closed-loop simulation of the *Drosophila* male ventral nerve cord driving a biomechanical fly in MuJoCo.** The brain is a dual-timeconstant leaky integrate-and-fire reconstruction of the Sept 2026 male-cns:v1.0 connectome release (24,115 neurons, 1.7M weighted edges). Only a thin command interface is learned; the connectome itself is never modified.
 
+![Live viewer: brain and VNC lighting up as drive commands change, with a 3D fly in the corner](docs/demo.gif)
+
 Includes a live FastAPI + Three.js viewer that streams spikes from the running sim at 50 Hz and renders every neuron at its anatomical position with a stylized 3D fly in the corner.
 
 ---
@@ -161,11 +163,11 @@ Edges are split by presynaptic neurotransmitter class into two sparse CSR tensor
 
 | Experiment | Verdict | Detail |
 |---|---|---|
-| V2 — MDN raises motor pool | ✅ PASS | 349× over baseline |
-| V2 — DNp09 suppression | ⚠️ PARTIAL | ratio 0.84 (16% suppression) with correct biological latency (25 ms). Full suppression requires shunting inhibition not representable in current-based point-neuron LIF. |
-| V2 — latency criterion | ✅ PASS | 25 ms, matches fly literature |
-| V1 — oscillation present | ✅ | rhythmic motor response, not noise |
-| V1 — tripod anti-phase | ❌ | brain-only sim cannot break hemisegment symmetry without proprioceptive feedback (Mantziaris 2020) |
+| V2 — MDN raises motor pool | PASS | 349x over baseline |
+| V2 — DNp09 suppression | PARTIAL | ratio 0.84 (16% suppression) with correct biological latency (25 ms). Full suppression requires shunting inhibition not representable in current-based point-neuron LIF. |
+| V2 — latency criterion | PASS | 25 ms, matches fly literature |
+| V1 — oscillation present | PASS | rhythmic motor response, not noise |
+| V1 — tripod anti-phase | FAIL | brain-only sim cannot break hemisegment symmetry without proprioceptive feedback (Mantziaris 2020) |
 
 The project documents these findings transparently rather than tuning parameters to force passes. The two open gaps map onto two concrete next milestones:
 
