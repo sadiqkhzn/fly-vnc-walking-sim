@@ -1,125 +1,218 @@
-# Fly VNC → Robot
+# Fly VNC Walking Simulation
 
-A biologically-grounded simulation of the *Drosophila* male ventral nerve cord
-(VNC) driving a hexapod robot in physics simulation. The brain is a fixed
-leaky-integrate-and-fire reconstruction of the Sept 2026 male CNS connectome
-(Cell, 166,700 neurons, 125M connections). Only a thin command interface is
-learned; the connectome itself is never modified.
+**Closed-loop simulation of the *Drosophila* male ventral nerve cord driving a biomechanical fly in MuJoCo.** The brain is a dual-timeconstant leaky integrate-and-fire reconstruction of the Sept 2026 male-cns:v1.0 connectome release (24,115 neurons, 1.7M weighted edges). Only a thin command interface is learned; the connectome itself is never modified.
 
-## Claim
+Includes a live FastAPI + Three.js viewer that streams spikes from the running sim at 50 Hz and renders every neuron at its anatomical position with a stylized 3D fly in the corner.
 
-Walking is the native function of the VNC. If a complete connectome is
-sufficient to reproduce fly behavior, a closed-loop simulation of the VNC
-driving a biomechanically accurate fly model should (a) reproduce published
-descending-command experiments, and (b) walk under novel sensory conditions.
+---
 
-## Scientific validation (must pass before anything else is interesting)
+## Scientific claim
 
-1. **Tripod gait from descending drive** — tonic MDN / bolt-protocerebrum walk
-   DN stimulation produces alternating tripod stepping without sensory input.
-   Target: Bidaye et al. 2020, Cande et al. 2018.
-2. **Descending stop command** — DNp09 activation halts walking within one
-   step cycle. Target: Bidaye et al. 2014.
-3. **Asymmetric descending drive → turning** — unilateral DNa01 / DNa02
-   activation produces smooth ipsilateral turn. Target: Rayshubskiy et al. 2020.
+Walking is the native function of the VNC. If a complete connectome is sufficient to reproduce fly behavior, a closed-loop simulation of the VNC driving a biomechanically accurate fly model should (a) reproduce published descending-command experiments, and (b) walk under novel sensory conditions.
 
-Each validation experiment outputs a figure alongside the published reference
-in `validation/figures/`. Project is not shippable until all three pass.
+Validation experiments documented in `src/validation/` compare the sim against published results from Bidaye et al. 2020, Bidaye et al. 2014, Cande et al. 2018, and Rayshubskiy et al. 2020. Current status in [Scientific status](#scientific-status) below.
 
-## Stack
+---
 
-| Layer | Tool |
-|---|---|
-| Connectome | neuPrint + CAVE (Janelia / HHMI, Sept 2026 male CNS release) |
-| Brain sim | PyTorch sparse LIF, 1 ms timestep |
-| Biomechanics | NeuroMechFly 2 (EPFL Ramdya lab) on MuJoCo |
-| Streaming | FastAPI + WebSockets |
-| Viewer | Three.js, neuron positions from neuPrint |
+## Repository layout
 
-Everything free and open source. See `requirements.txt` for Python deps.
+```
+src/
+  data/            neuPrint fetch + VNC subset extraction
+  sim/             dual-τ LIF simulator, closed-loop runner
+  encoding/        sensor → spike encoders, motor spike → torque decoders
+  biomech/         NeuroMechFly bridge
+  validation/      the mandatory reproduction experiments + figures
+  server/          FastAPI + WebSocket for the live viewer
+viewer/            Three.js live viewer (vanilla JS, no build step)
+scripts/           numbered pipeline steps (fetch → build → run → validate)
+data/              cached connectome subset (gitignored; reproducible from scripts)
+```
 
-## Scope restriction
+---
 
-Load only the VNC + descending neurons from brain (~15-20k neurons), not the
-full 166,700. This is the motor system. Olfaction, memory, and central complex
-circuits are out of scope for v1.
+## Install
 
-## Honest expected results
+### Prerequisites
 
-- Walks reliably on flat ground.
-- Handles mild slopes and small obstacles via reflex arcs.
-- Fails on rough terrain — the VNC alone cannot plan footholds.
-- A trained RL policy would beat it. That is not the point. The point is that
-  the connectome, unchanged, reproduces published fly motor behavior.
+- Python 3.12 or 3.13 (3.14 works but torch wheels can lag)
+- macOS, Linux, or WSL on Windows
+- About 300 MB disk for the cached connectome subset
+- A free [neuPrint](https://neuprint.janelia.org) account for the auth token
 
-## Current status (as of Pass 11)
+### Steps
+
+```bash
+# clone
+git clone https://github.com/sadiqkhzn/fly-vnc-walking-sim.git
+cd fly-vnc-walking-sim
+
+# venv
+python3 -m venv .venv
+source .venv/bin/activate
+
+# install deps
+pip install -r requirements.txt
+
+# or for exact reproducibility of the author's working environment:
+pip install -r requirements-lock.txt
+```
+
+### Credentials
+
+Create `.env` (gitignored) at the repo root:
+
+```
+NEUPRINT_SERVER=https://neuprint.janelia.org
+NEUPRINT_DATASET=male-cns:v1.0
+NEUPRINT_TOKEN=<paste-your-token-here>
+```
+
+Get your token at <https://neuprint.janelia.org> → Account page.
+
+---
+
+## Reproduce
+
+Each script is numbered and idempotent. First run of `01_fetch_connectome.py` takes ~2 minutes over the network and caches to `data/`. Subsequent runs are near-instant.
+
+```bash
+# 1. Fetch the VNC subset from neuPrint (24,115 neurons, 1.77M edges)
+python scripts/01_fetch_connectome.py
+
+# 2. Sanity-check cached data (bilateral symmetry, NT distribution, orphan edges)
+python scripts/02_sanity.py
+
+# 3. Build the signed sparse weight tensor (one-shot, writes data/vnc_graph.pt)
+python scripts/03_build_graph.py
+
+# 4. Brain-only test: MDN drive → motor pool activation (no biomechanics yet)
+python scripts/06_brain_only.py
+
+# 5. Fetch per-motor-neuron VNC-ROI assignment (needed by validation experiments)
+python scripts/10a_motor_rois.py
+
+# 6. Validation experiments (produce figures + JSON reports)
+python src/validation/test_tripod_gait.py
+python src/validation/test_stop_command.py
+
+# 7. Closed-loop smoke test: brain spikes → fly actuators → fly moves
+python scripts/09_closed_loop.py
+```
+
+### Live viewer
+
+```bash
+python -m src.server.main
+```
+
+Open <http://127.0.0.1:8000>. Buttons on the right drive the sim; the brain
+spikes in real time via WebSocket. Drag anywhere to orbit (TrackballControls,
+free in any direction).
+
+---
+
+## Simulator design
+
+### Dual-τ conductance LIF (`src/sim/lif.py`)
+
+Standard conductance-based model (Dayan & Abbott 2001, Ch 5):
+
+```
+g_E[t+1] = g_E[t] * exp(-dt/τ_E) + (W_exc @ spikes[t]) * syn_scale_e
+g_I[t+1] = g_I[t] * exp(-dt/τ_I) + (W_inh @ spikes[t]) * syn_scale_i
+V  [t+1] = V_rest + (V[t] - V_rest) * exp(-dt/τ_m) + g_E - g_I + external_input
+```
+
+Defaults (from `LIFParams`):
+- `τ_m = 20 ms` — membrane
+- `τ_E =  5 ms` — fast nAChR
+- `τ_I = 150 ms` — slow mixed GABA / GluCl in insect VNC
+
+The asymmetry gives rise to winner-take-all and gating dynamics that collapse when `τ_E = τ_I`. Weight tensors are magnitudes (both non-negative), sign applied via Dale's law in the graph builder.
+
+### Graph build (`scripts/03_build_graph.py`)
+
+Edges are split by presynaptic neurotransmitter class into two sparse CSR tensors:
+
+- **Excitatory** (acetylcholine): 1,026,234 edges
+- **Inhibitory** (GABA, glutamate): 693,369 edges
+- Modulators (serotonin, dopamine, octopamine, histamine, unclear) are excluded from the LIF layer
+
+### NeuroMechFly bridge (`src/biomech/fly_bridge.py`)
+
+- 42 position-controlled actuators (6 legs × 7 DOF)
+- Full 3D foot contact force vectors + binary contact + contact position
+- Standing posture produces bilaterally symmetric foot forces matching real fly weight distribution (hind > middle > front)
+
+---
+
+## Scientific status
 
 **Working end-to-end:**
-- Fetched 24,115 VNC + descending neurons from `male-cns:v1.0` (Sept 2026 release),
-  1.77M weight ≥ 3 edges, 22.4M total synapses. Full bilateral symmetry (L=8472, R=8413).
-- Dual-timeconstant conductance LIF (fast E, slow I). Split sparse tensors:
-  1,026,234 excitatory + 693,369 inhibitory edges. Dale's law via `predictedNt`.
-- Brain-only test: zero baseline, MDN drive → motor pool activates widely with
-  realistic 5–30 Hz rates and healthy sparseness (27% active).
-- Closed loop: MDN drive → spikes → actuators → fly walks (1.17 mm in 400 ms).
-- NeuroMechFly bridge: 42 position-controlled actuators, full 3D foot force
-  sensors, bilaterally symmetric standing posture matching fly biomechanics.
-- Live viewer: FastAPI + Three.js, 24k neurons as InstancedMesh, spike-driven
-  glow at 50 Hz, interactive drive controls.
+- Fetched 24,115 VNC + descending neurons from `male-cns:v1.0` (Sept 2026)
+- 1.77M weight ≥ 3 edges, 22.4M total synapses
+- Bilateral symmetry: L=8472, R=8413, M=314
+- Signed sparse tensor: 57.9% excitatory / 39.1% inhibitory / 2.9% modulatory
+- Brain-only test: MDN drive raises motor pool from 0 → ~30 Hz with 37.5% active cells
+- Closed loop: fly produces 1.17 mm of movement in 400 ms of MDN drive
 
 **Validation results (honest):**
 
 | Experiment | Verdict | Detail |
 |---|---|---|
 | V2 — MDN raises motor pool | ✅ PASS | 349× over baseline |
-| V2 — DNp09 suppression | ⚠️ PARTIAL | ratio 0.84 (16% suppression), with correct biological latency (25 ms). Full suppression requires shunting inhibition not representable in current-based point-neuron LIF. |
+| V2 — DNp09 suppression | ⚠️ PARTIAL | ratio 0.84 (16% suppression) with correct biological latency (25 ms). Full suppression requires shunting inhibition not representable in current-based point-neuron LIF. |
 | V2 — latency criterion | ✅ PASS | 25 ms, matches fly literature |
 | V1 — oscillation present | ✅ | rhythmic motor response, not noise |
 | V1 — tripod anti-phase | ❌ | brain-only sim cannot break hemisegment symmetry without proprioceptive feedback (Mantziaris 2020) |
 
-**Scientific stance:** we **document findings transparently** instead of tuning
-to force passes. The two open gaps map onto two concrete, well-defined next
-milestones:
+The project documents these findings transparently rather than tuning parameters to force passes. The two open gaps map onto two concrete next milestones:
 
-1. **Shunting inhibition** — upgrade LIF to a conductance-based model with
-   explicit reversal potentials. This is the standard next step beyond
-   current-based LIF (Dayan & Abbott Ch 5.4).
-2. **Closed sensory loop** — route the already-exposed `foot_force_vec`,
-   `foot_contact`, and `joint_angles` into chordotonal / campaniform sensory
-   neurons in the VNC. The sensors are wired through FlyBridge; what's left is
-   the encoding function and the appropriate sensory neuron body IDs.
+1. **Shunting inhibition** — upgrade LIF to a conductance-based model with explicit reversal potentials (Dayan & Abbott Ch 5.4).
+2. **Closed sensory loop** — route the already-exposed `foot_force_vec`, `foot_contact`, and `joint_angles` into chordotonal / campaniform sensory neurons in the VNC. The sensors are wired through FlyBridge; what's left is the encoding function and the appropriate sensory neuron body IDs.
 
 The connectome itself is never modified. The simulator is the thing we iterate on.
 
-## Directory layout
+---
 
+## References
+
+Primary data:
+- **male-cns:v1.0** — [neuprint.janelia.org](https://neuprint.janelia.org), Sept 2026 release
+- **NeuroMechFly v2** — <https://github.com/NeLy-EPFL/flygym>
+
+Validation targets:
+- Bidaye et al. 2014 — DNp09 stops walking (*Science*)
+- Bidaye et al. 2020 — MDN moonwalker command neurons (*Nature*)
+- Cande et al. 2018 — Optogenetic activation reveals CPG tripod coordination (*eLife*)
+- Rayshubskiy et al. 2020 — Neural circuits for turning (*bioRxiv*)
+- Phelps et al. 2021 — Motor neuron atlas (FANC, *Cell*)
+- Mantziaris et al. 2020 — Sensory feedback and insect CPGs (*Current Opinion in Insect Science*)
+
+Methods:
+- Dayan P. & Abbott L.F. 2001 — *Theoretical Neuroscience*. MIT Press. (Chapter 5 — conductance-based neuron models)
+
+---
+
+## Citation
+
+If you use this work, please cite:
+
+```bibtex
+@software{khan_fly_vnc_walking_sim_2026,
+  author = {Khan, Sadiq},
+  title  = {Fly VNC Walking Simulation},
+  year   = 2026,
+  url    = {https://github.com/sadiqkhzn/fly-vnc-walking-sim},
+  version = {0.1.0}
+}
 ```
-src/
-  data/        neuPrint fetch, VNC subset extraction
-  sim/         LIF simulator, closed-loop runner
-  encoding/    sensor → spike encoders, motor spike → torque decoders
-  biomech/     NeuroMechFly bridge
-  validation/  the three mandatory reproduction experiments
-  server/      FastAPI + WebSocket streaming
-viewer/        Three.js live visualization
-scripts/       one-shot pipeline steps (fetch → build → validate)
-```
 
-## Timeline
+Or use the "Cite this repository" button on GitHub (powered by [CITATION.cff](CITATION.cff)).
 
-| Week | Deliverable |
-|---|---|
-| 1 | neuPrint access, VNC subset extracted, LIF sim produces spikes |
-| 2 | NeuroMechFly closed loop with hand-tuned descending commands |
-| 3 | All three validation experiments pass |
-| 4 | Readout trained over varied terrain |
-| 5 | Three.js live viewer streaming over WebSocket |
-| 6 | Writeup, demo video, arXiv preprint, LinkedIn post |
+---
 
-## Citations to add on first commit of writeup
+## License
 
-- Sept 2026 Cell paper (male CNS connectome)
-- June 2026 Nature "Distributed control circuits across a brain-and-cord connectome"
-- Lobato-Rios et al. 2022 (NeuroMechFly) + 2024/25 updates
-- Bidaye, Cande, Rayshubskiy validation references above
-- Phelps et al. 2021 (FANC motor neuron → muscle mapping)
+MIT — see [LICENSE](LICENSE).

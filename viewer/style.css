@@ -30,6 +30,13 @@ html, body {
   z-index: 0;
 }
 
+/* Panels sit on top of the canvas visually but must NOT swallow mouse drags —
+   otherwise the trackball controls can't orbit when the pointer passes over
+   them. We disable pointer events on the read-only panels, and keep the
+   drive controls fully clickable (its background will absorb clicks on the
+   panel area, but orbit works everywhere else on the viewport). */
+#hud, #legend, #footer { pointer-events: none; }
+
 /* --- HUD (top-left) --- */
 
 #hud {

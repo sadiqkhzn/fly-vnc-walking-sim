@@ -1,0 +1,48 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it as below."
+title: "Fly VNC Walking Simulation"
+abstract: >
+  Closed-loop simulation of the Drosophila male ventral nerve cord driving
+  a biomechanical fly in MuJoCo. A dual-timeconstant leaky integrate-and-fire
+  network is built directly from the Sept 2026 male-cns:v1.0 connectome
+  release (24,115 neurons, 1.7M weighted edges) and coupled to NeuroMechFly v2
+  through sensor-motor interfaces. The connectome weights are never modified;
+  only a thin command interface is learned.
+authors:
+  - family-names: Khan
+    given-names: Sadiq
+    email: sadiqkhan795@gmail.com
+    orcid: ""
+version: "0.1.0"
+date-released: "2026-10-05"
+license: MIT
+repository-code: "https://github.com/sadiqkhzn/fly-vnc-walking-sim"
+keywords:
+  - connectomics
+  - drosophila
+  - ventral-nerve-cord
+  - spiking-neural-network
+  - computational-neuroscience
+  - neuromechfly
+  - mujoco
+  - biomechanics
+references:
+  - type: article
+    title: "The complete connectome of the male Drosophila central nervous system"
+    year: 2026
+    notes: "male-cns:v1.0 release on neuPrint — primary data source"
+  - type: article
+    title: "NeuroMechFly v2 — a neuromechanical model of adult Drosophila"
+    authors:
+      - family-names: Lobato-Rios
+        given-names: Victor
+    year: 2024
+  - type: article
+    title: "Theoretical Neuroscience: Computational and Mathematical Modeling of Neural Systems"
+    authors:
+      - family-names: Dayan
+        given-names: Peter
+      - family-names: Abbott
+        given-names: L.F.
+    year: 2001
+    notes: "Chapter 5 — conductance-based LIF model used for the dual-τ dynamics"

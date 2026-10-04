@@ -6,7 +6,7 @@
 // activity each frame costs O(spikes), not O(neurons).
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { TrackballControls } from "three/addons/controls/TrackballControls.js";
 import { createFly } from "./fly_model.js";
 
 // -------------- role → base color (RGB tuple) --------------
@@ -43,13 +43,17 @@ const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerH
 // Both views now point at the same unit vector; brain and fly share pose.
 camera.position.set(144, 97, 225);
 
-const controls = new OrbitControls(camera, canvas);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.rotateSpeed = 0.5;
-controls.zoomSpeed = 0.9;
-controls.autoRotate = false;       // user can enable with a button later
-controls.autoRotateSpeed = 0.3;
+// TrackballControls (not OrbitControls) because OrbitControls locks the
+// camera's up vector to world +Y, which creates a gimbal-lock feel near
+// the poles. TrackballControls allows free tumbling in any direction.
+const controls = new TrackballControls(camera, canvas);
+controls.rotateSpeed = 3.5;
+controls.zoomSpeed = 1.2;
+controls.panSpeed = 0.8;
+controls.noZoom = false;
+controls.noPan = false;
+controls.staticMoving = false;
+controls.dynamicDampingFactor = 0.15;
 
 // -------------- state --------------
 let instanced = null;           // THREE.InstancedMesh
@@ -58,6 +62,8 @@ let glow = null;                // Float32Array of per-neuron glow level
 let baseColor = null;           // Float32Array of role base colors (N * 3)
 let indexCount = 0;
 let scaleFactor = 1;
+let brainPivot = null;          // module scope so the tick loop can auto-rotate
+let autoRotate = true;          // horizontal auto-rotation; pauses while the user drags
 
 // -------------- corner fly --------------
 // Procedural Drosophila-ish fly, lit by a key + rim light so it reads 3D.
@@ -102,6 +108,7 @@ const fly = createFly();
 flyWings = fly.wingPivots.map((pivot, i) => ({ pivot, sx: i === 0 ? 1 : -1 }));
 const flyGroup = fly.group;
 flyScene.add(flyGroup);
+
 
 // Mini brain attached to the head group so it tracks any head motion.
 (function attachMiniBrain() {
@@ -167,7 +174,7 @@ async function loadNeurons() {
     if (r > maxR) maxR = r;
   }
   // Scale so the whole brain fits in a sphere of radius ~BRAIN_RADIUS world units.
-  const BRAIN_RADIUS = 100;              // world units; camera sits at ~2.5x this
+  const BRAIN_RADIUS = 115;              // size tuned for the default framing
   scaleFactor = maxR > 0 ? BRAIN_RADIUS / maxR : 1;
   // male-cns coordinate frame has y ~ dorso-ventral and z ~ anterior-posterior
   // in nanometers. We lay flat with y-up, so swap y <-> z and invert.
@@ -219,11 +226,14 @@ async function loadNeurons() {
   instanced.instanceMatrix.needsUpdate = true;
   instanced.instanceColor.needsUpdate = true;
 
-  // Wrap the instanced mesh in a pivot so we can apply the same -0.3 rad Y
-  // rotation the corner fly uses — gives the brain a 3/4 pose from the fly
-  // camera direction instead of a pure side profile.
-  const brainPivot = new THREE.Group();
+  // Wrap the instanced mesh in a pivot so we can auto-rotate the whole brain
+  // around the vertical axis. Initial X rotation flips the brain upside-down
+  // (ventral up), Y rotation gives the 3/4 pose that matches the corner fly
+  // on load; the tick loop increments Y after.
+  brainPivot = new THREE.Group();
+  brainPivot.rotation.x = Math.PI;
   brainPivot.rotation.y = -0.3;
+  brainPivot.position.y = 35;     // lift the brain slightly up in the viewport
   brainPivot.add(instanced);
   scene.add(brainPivot);
   indexCount = n;
@@ -321,9 +331,19 @@ function animateFly(elapsedS) {
   flyGroup.position.y = Math.sin(elapsedS * 1.2) * 0.05;
 }
 
+// Pause auto-rotation while the user is interacting with the trackball, resume
+// after they let go. Keeps it from fighting their drag.
+canvas.addEventListener("mousedown", () => { autoRotate = false; });
+canvas.addEventListener("mouseup",   () => { autoRotate = true;  });
+canvas.addEventListener("mouseleave", () => { autoRotate = true; });
+
 function tick() {
   requestAnimationFrame(tick);
   controls.update();
+
+  if (autoRotate && brainPivot) {
+    brainPivot.rotation.y -= 0.004;   // anti-clockwise (viewed from above)
+  }
 
   if (glow && colorAttr) {
     const arr = colorAttr.array;
