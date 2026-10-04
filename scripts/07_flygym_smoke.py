@@ -10,7 +10,7 @@ import time
 
 import numpy as np
 
-from flygym.anatomy import ActuatedDOFPreset, AxisOrder, JointPreset, Skeleton
+from flygym.anatomy import ActuatedDOFPreset, AxisOrder, ContactBodiesPreset, JointPreset, Skeleton
 from flygym.compose import FlatGroundWorld, KinematicPosePreset, NeuroMechFly
 from flygym.simulation import Simulation
 from flygym.utils.math import Rotation3D
@@ -38,7 +38,7 @@ def main():
         fly,
         spawn_position=np.array([0.0, 0.0, 0.7]),
         spawn_rotation=Rotation3D(format="quat", values=[1, 0, 0, 0]),
-        add_ground_contact_sensors=False,  # avoid name mismatch in flygym 2.1.0 sensors
+        bodysegs_with_ground_contact=ContactBodiesPreset.TIBIA_TARSUS_ONLY,
     )
     sim = Simulation(world)
     print(f"construction: {time.time() - t0:.2f}s")

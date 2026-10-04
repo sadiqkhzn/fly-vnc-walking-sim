@@ -47,7 +47,7 @@ def run_closed_loop(
         sens_current = sensory.encode(
             joint_angles=obs.joint_angles,
             joint_velocities=obs.joint_velocities,
-            ground_force=obs.ground_force,
+            ground_force=obs.foot_force_mag,
         )
         desc_current = descending.drive(command_fn(t))
 

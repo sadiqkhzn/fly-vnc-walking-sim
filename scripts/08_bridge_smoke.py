@@ -39,9 +39,9 @@ def main():
     for _ in range(5000):
         obs = bridge.step(neutral)
     print(f"  wall: {time.time()-t0:.2f}s   root pos: {obs.root_pos}  foot |F|: " +
-          "  ".join(f"{bridge._foot_segments[i][:2]}={obs.foot_force[i]:.2f}"
+          "  ".join(f"{bridge._foot_segments[i][:2]}={obs.foot_force_mag[i]:.2f}"
                     for i in range(6)))
-    assert (obs.foot_force > 0.1).sum() == 6, "all 6 feet should be loaded while standing"
+    assert (obs.foot_force_mag > 0.1).sum() == 6, "all 6 feet should be loaded while standing"
 
     # --- B) Perturb one leg ---
     print("\n[B] sinusoidal perturbation on first joint (nominally lf coxa pitch), 5000 steps")
@@ -62,7 +62,10 @@ def main():
     print("\n[C] observation sanity")
     print(f"  joint_angles      shape {obs.joint_angles.shape}  dtype {obs.joint_angles.dtype}")
     print(f"  joint_velocities  shape {obs.joint_velocities.shape}")
-    print(f"  foot_force        shape {obs.foot_force.shape}  values {obs.foot_force}")
+    print(f"  foot_force_mag    shape {obs.foot_force_mag.shape}  values {obs.foot_force_mag}")
+    print(f"  foot_force_vec    shape {obs.foot_force_vec.shape}")
+    print(f"  foot_contact      {obs.foot_contact}")
+    print(f"  foot_pos (lf)     {obs.foot_pos[0]}")
     print(f"  root_pos          shape {obs.root_pos.shape}  values {obs.root_pos}")
     print(f"  sim_time          {obs.sim_time:.4f} s")
 

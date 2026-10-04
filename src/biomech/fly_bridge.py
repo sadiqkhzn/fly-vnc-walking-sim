@@ -21,13 +21,19 @@ import numpy as np
 
 FOOT_SEGMENTS = tuple(f"{s}{r}_tarsus5" for s in ("l", "r") for r in ("f", "m", "h"))
 
+# Canonical leg ordering used throughout the project (sensors return in this order).
+LEG_ORDER = ("lf", "lm", "lh", "rf", "rm", "rh")
+
 
 @dataclass
 class Observation:
-    joint_angles: np.ndarray      # (n_dof,) rad
-    joint_velocities: np.ndarray  # (n_dof,) rad/s
-    foot_force: np.ndarray        # (6,) magnitude of ground reaction per leg (lf, lm, lh, rf, rm, rh)
-    root_pos: np.ndarray          # (3,) c_thorax position
+    joint_angles: np.ndarray         # (n_dof,) rad — all 126 DOFs including passive tarsi
+    joint_velocities: np.ndarray     # (n_dof,) rad/s
+    foot_force_vec: np.ndarray       # (6, 3) full 3D ground reaction force per leg (lf, lm, lh, rf, rm, rh)
+    foot_force_mag: np.ndarray       # (6,) magnitude per leg (|foot_force_vec|)
+    foot_contact: np.ndarray         # (6,) binary — 1 if leg is in contact
+    foot_pos: np.ndarray             # (6, 3) world position of contact point per leg
+    root_pos: np.ndarray             # (3,) c_thorax position
     sim_time: float
 
 
@@ -42,6 +48,7 @@ class FlyBridge:
         from flygym.anatomy import (
             ActuatedDOFPreset,
             AxisOrder,
+            ContactBodiesPreset,
             JointPreset,
             Skeleton,
         )
@@ -73,15 +80,26 @@ class FlyBridge:
             kp=actuator_kp,
         )
 
+        # Ground contact biology: only tibias + tarsi touch the floor when a fly
+        # walks. Using the LEGS_THORAX_ABDOMEN_HEAD preset would also sensorize
+        # non-leg segments which is both biologically wrong (the body doesn't
+        # scrape) and triggers a sensor-registration edge case in flygym 2.1.0
+        # (coxa listed as both root-segment and ground-contact body). Using the
+        # restricted preset is correct AND avoids the edge case.
         world = FlatGroundWorld()
         world.add_fly(
             self.fly,
             spawn_position=np.array([0.0, 0.0, spawn_z]),
             spawn_rotation=Rotation3D(format="quat", values=[1, 0, 0, 0]),
-            add_ground_contact_sensors=False,
+            bodysegs_with_ground_contact=ContactBodiesPreset.TIBIA_TARSUS_ONLY,
+            add_ground_contact_sensors=True,
         )
         self.sim = Simulation(world)
         self.timestep = self.sim.timestep
+        self._has_ground_sensors = (
+            self.sim.world.legpos_to_groundcontactsensors_by_fly is not None
+            and self.fly.name in self.sim.world.legpos_to_groundcontactsensors_by_fly
+        )
 
         # Two different sizes:
         #   n_dof        = 126 (all skeletal DOFs — chordotonal organs sense all of them)
@@ -131,15 +149,35 @@ class FlyBridge:
     def observation(self) -> Observation:
         angles = self.sim.get_joint_angles(self.fly.name)
         vels = self.sim.get_joint_velocities(self.fly.name)
-        gc = np.asarray(
-            self.sim.get_bodysegment_contact_forces(self.fly.name, self._foot_segments)
-        )
-        foot_force = np.linalg.norm(gc, axis=1)
         pos = self.sim.get_body_positions(self.fly.name)
+
+        # Prefer the native MuJoCo contact sensor (per-leg 3D force + position +
+        # normals). Fall back to the body-contact force sum if sensors absent
+        # (keeps the API intact if a caller disables sensors for perf).
+        if self._has_ground_sensors:
+            found, cpos, _torque, force, _normal, _tangent = self.sim.get_ground_contact_info(
+                self.fly.name
+            )
+            foot_force_vec = np.asarray(force, dtype=np.float64)        # (6, 3)
+            foot_force_mag = np.linalg.norm(foot_force_vec, axis=1)     # (6,)
+            foot_contact = np.asarray(found, dtype=np.float64)          # (6,)
+            foot_pos = np.asarray(cpos, dtype=np.float64)               # (6, 3)
+        else:
+            gc = np.asarray(
+                self.sim.get_bodysegment_contact_forces(self.fly.name, self._foot_segments)
+            )
+            foot_force_vec = gc
+            foot_force_mag = np.linalg.norm(gc, axis=1)
+            foot_contact = (foot_force_mag > 1e-4).astype(np.float64)
+            foot_pos = np.zeros_like(foot_force_vec)
+
         return Observation(
             joint_angles=angles,
             joint_velocities=vels,
-            foot_force=foot_force,
+            foot_force_vec=foot_force_vec,
+            foot_force_mag=foot_force_mag,
+            foot_contact=foot_contact,
+            foot_pos=foot_pos,
             root_pos=pos[0],
             sim_time=self.sim.time,
         )
