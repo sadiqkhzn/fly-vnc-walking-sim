@@ -26,17 +26,25 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x050607, 1);
+renderer.autoClear = false;  // we composite main scene + corner fly in the same frame
 
 const scene = new THREE.Scene();
+// Fog adds depth: distant neurons fade toward the background. Range tuned
+// to brain radius (loadNeurons scales so maxR → 100 world units).
+scene.fog = new THREE.Fog(0x050607, 150, 420);
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 5000);
-camera.position.set(0, 0, 260);
+// Start at an angled 3D view (anterior-dorsal perspective) so the volume
+// reads as 3D from first paint, instead of looking like a flat drawing.
+camera.position.set(140, 90, 220);
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.rotateSpeed = 0.5;
 controls.zoomSpeed = 0.9;
+controls.autoRotate = false;       // user can enable with a button later
+controls.autoRotateSpeed = 0.3;
 
 // -------------- state --------------
 let instanced = null;           // THREE.InstancedMesh
@@ -45,6 +53,115 @@ let glow = null;                // Float32Array of per-neuron glow level
 let baseColor = null;           // Float32Array of role base colors (N * 3)
 let indexCount = 0;
 let scaleFactor = 1;
+
+// -------------- corner fly --------------
+// A separate THREE.Scene (overlay) with a procedural fly:
+//   - ellipsoid body (segmented coloration: head/thorax/abdomen)
+//   - sphere head with a mini point-cloud "brain" that pulses with firing rate
+//   - two flat wings that buzz (rotation about the attachment axis at ~200 Hz
+//     wall-clock, visually clamped so the browser can keep up)
+//   - six leg segments (thin cylinders) so you can tell it's a hexapod
+const flyScene = new THREE.Scene();
+const flyCamera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+flyCamera.position.set(0, 1.5, 6);
+flyCamera.lookAt(0, 0, 0);
+
+let flyWings = [];        // two wing meshes we animate
+let flyBrainGlow = null;  // mini point cloud inside the head
+let flyBrainGlowBase = 0.2;
+
+function buildFly() {
+  const g = new THREE.Group();
+
+  // Thorax (middle segment of the body)
+  const thorax = new THREE.Mesh(
+    new THREE.SphereGeometry(0.55, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x3a2a1a })
+  );
+  thorax.scale.set(1, 0.9, 1.1);
+  g.add(thorax);
+
+  // Abdomen (rear)
+  const abdomen = new THREE.Mesh(
+    new THREE.SphereGeometry(0.45, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x2a1a10 })
+  );
+  abdomen.position.set(0, 0, -0.95);
+  abdomen.scale.set(0.9, 0.8, 1.6);
+  g.add(abdomen);
+
+  // Head
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.42, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x201510 })
+  );
+  head.position.set(0, 0.05, 0.9);
+  head.scale.set(1.1, 1.0, 0.95);
+  g.add(head);
+
+  // Compound eyes
+  for (const sx of [-1, 1]) {
+    const eye = new THREE.Mesh(
+      new THREE.SphereGeometry(0.21, 10, 8),
+      new THREE.MeshBasicMaterial({ color: 0x8a1a1a })
+    );
+    eye.position.set(sx * 0.3, 0.08, 1.08);
+    g.add(eye);
+  }
+
+  // Mini "brain" point cloud inside the head — pulses with firing rate.
+  // 60 points inside a small sphere → read as a little glowing blob.
+  const brainPts = 60;
+  const brainGeo = new THREE.BufferGeometry();
+  const pos = new Float32Array(brainPts * 3);
+  for (let i = 0; i < brainPts; i++) {
+    // Rejection-sampled unit sphere
+    let x, y, z, r2;
+    do { x = Math.random()*2 - 1; y = Math.random()*2 - 1; z = Math.random()*2 - 1; r2 = x*x+y*y+z*z; } while (r2 > 1);
+    const s = 0.22;
+    pos[i*3] = x * s; pos[i*3 + 1] = y * s; pos[i*3 + 2] = z * s;
+  }
+  brainGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const brainMat = new THREE.PointsMaterial({ color: 0x5fd3ff, size: 0.045, transparent: true, opacity: 0.85 });
+  flyBrainGlow = new THREE.Points(brainGeo, brainMat);
+  flyBrainGlow.position.copy(head.position);
+  g.add(flyBrainGlow);
+
+  // Wings (two flat planes attached at the thorax, hinged at inner edge)
+  const wingMat = new THREE.MeshBasicMaterial({
+    color: 0xaad7ff, transparent: true, opacity: 0.25, side: THREE.DoubleSide,
+  });
+  for (const sx of [-1, 1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(sx * 0.2, 0.28, -0.15);
+    const wing = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.55), wingMat);
+    // Place the wing to the side of the pivot (shift along x) so the pivot rotation hinges correctly.
+    wing.position.set(sx * 0.75, 0, -0.2);
+    wing.rotation.y = sx > 0 ? -0.15 : 0.15;
+    pivot.add(wing);
+    g.add(pivot);
+    flyWings.push({ pivot, sx });
+  }
+
+  // Six legs — thin cylinders arranged in a hexapod stance
+  const legMat = new THREE.MeshBasicMaterial({ color: 0x1a1208 });
+  const legPositions = [
+    [-0.55, -0.35,  0.35], [-0.55, -0.35, -0.1], [-0.55, -0.35, -0.55],  // L front/mid/hind
+    [ 0.55, -0.35,  0.35], [ 0.55, -0.35, -0.1], [ 0.55, -0.35, -0.55],  // R
+  ];
+  for (const [x, y, z] of legPositions) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.9, 6), legMat);
+    leg.position.set(x, y - 0.35, z);
+    leg.rotation.z = x < 0 ? -0.6 : 0.6;
+    g.add(leg);
+  }
+
+  g.rotation.y = -0.2;  // slight 3/4 view
+  flyScene.add(g);
+  return g;
+}
+
+const flyGroup = buildFly();
 
 let totalSpikesInWindow = 0;
 let lastRateT = performance.now();
@@ -200,6 +317,32 @@ for (const btn of document.querySelectorAll("#controls button[data-action='reset
 }
 
 // -------------- animation loop --------------
+function animateFly(elapsedS) {
+  // Wing buzz: ~200 Hz in real flies; visually cap at ~25 Hz so we don't just
+  // see a blur. Phase-locked between wings so it reads as "beating together".
+  const buzzHz = 22;
+  const amp = 0.55;
+  const theta = Math.sin(elapsedS * buzzHz * 2 * Math.PI) * amp;
+  for (const w of flyWings) {
+    w.pivot.rotation.z = w.sx * (0.1 + theta);
+  }
+
+  // Mini-brain intensity tracks the main-sim firing rate smoothly.
+  // Target brightness proportional to firing / 5000 Hz, clamped.
+  const targetBrightness = Math.min(1.0, currentFiringHz / 5000);
+  flyBrainGlowBase += (targetBrightness - flyBrainGlowBase) * 0.08;
+  if (flyBrainGlow) {
+    const b = 0.25 + flyBrainGlowBase * 0.9;
+    flyBrainGlow.material.color.setRGB(0.37 * b * 2, 0.83 * b * 2, 1.0 * b * 2);
+    flyBrainGlow.material.opacity = 0.4 + flyBrainGlowBase * 0.55;
+    flyBrainGlow.material.size = 0.035 + flyBrainGlowBase * 0.03;
+  }
+
+  // Gentle idle sway for the whole fly
+  flyGroup.rotation.y = -0.2 + Math.sin(elapsedS * 0.5) * 0.07;
+  flyGroup.position.y = Math.sin(elapsedS * 1.2) * 0.05;
+}
+
 function tick() {
   requestAnimationFrame(tick);
   controls.update();
@@ -207,8 +350,6 @@ function tick() {
   if (glow && colorAttr) {
     const arr = colorAttr.array;
     const base = baseColor;
-    // Decay all glow values and write combined color.
-    // Hot loop — kept pure arithmetic for speed.
     for (let i = 0; i < glow.length; i++) {
       glow[i] *= GLOW_DECAY;
       const g = glow[i];
@@ -231,7 +372,24 @@ function tick() {
     lastRateT = now;
   }
 
+  animateFly(now / 1000);
+
+  // Composite: main scene full-viewport, then overlay fly in bottom-right.
+  renderer.clear();
+  renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+  renderer.setScissor(0, 0, window.innerWidth, window.innerHeight);
+  renderer.setScissorTest(false);
   renderer.render(scene, camera);
+
+  const flySize = Math.min(260, window.innerWidth * 0.22);
+  const flyX = window.innerWidth - flySize - 16;
+  const flyY = 240;  // leave headroom for the footer line
+  renderer.setViewport(flyX, flyY, flySize, flySize);
+  renderer.setScissor(flyX, flyY, flySize, flySize);
+  renderer.setScissorTest(true);
+  renderer.clearDepth();  // keep main-scene colour but fresh depth for the overlay
+  renderer.render(flyScene, flyCamera);
+  renderer.setScissorTest(false);
 }
 
 window.addEventListener("resize", () => {
