@@ -37,11 +37,11 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x050607, 260, 650);
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 5000);
-// Camera angle matches the corner fly's view direction so the main brain is
-// shown in the same anatomical pose (3/4 profile, slight tilt from both the
-// vertical and the horizontal). The corner fly uses position (5.5, 3.5, 7.5)
-// for a ~5 unit model; scaled to the brain radius (~100) that's (165, 105, 225).
-camera.position.set(165, 105, 225);
+// Camera direction matches the corner fly view EXACTLY:
+//   fly camera at (7.0, 4.4, 9.5) → direction (0.515, 0.345, 0.802)
+// Scaled to brain radius (~100, so distance ~280) → (144, 97, 225).
+// Both views now point at the same unit vector; brain and fly share pose.
+camera.position.set(144, 97, 225);
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
@@ -72,8 +72,10 @@ let scaleFactor = 1;
 // All sized in the fly's local units; the camera framing fits the whole fly.
 const flyScene = new THREE.Scene();
 const flyCamera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
-flyCamera.position.set(5.5, 3.5, 7.5);
-flyCamera.lookAt(0, -0.2, -1.6);
+// Pulled back from (5.5, 3.5, 7.5) so the abdomen tip isn't clipped by the
+// scissor viewport edges. lookAt still centred on the thorax.
+flyCamera.position.set(7.0, 4.4, 9.5);
+flyCamera.lookAt(0, -0.3, -1.4);
 
 // Lighting — hemisphere for ambient skydome + key for form + rim for silhouette
 flyScene.add(new THREE.HemisphereLight(0xffffff, 0x1a1218, 0.9));
@@ -202,10 +204,13 @@ async function loadNeurons() {
       const px = (d.x - cx) * scaleFactor;
       const py = (d.y - cy) * scaleFactor;
       const pz = (d.z - cz) * scaleFactor;
-      // Axis mapping chosen so the brain faces the camera in the same
-      // orientation as the corner-fly reference: anatomical dorsal → +Y (up),
-      // anatomical anterior → +Z (toward viewer), anatomical left-right → X.
-      m.makeTranslation(px, -py, -pz);
+      // Lay the brain so its long axis (anterior-posterior) is HORIZONTAL in
+      // the viewer, matching how the corner fly is drawn: head on the left,
+      // body extending right. Mapping:
+      //   viewer_x =  pz   anterior (low raw_z) → -X (left), posterior → +X (right)
+      //   viewer_y = -py   dorsal (low raw_y)  → +Y (up)
+      //   viewer_z =  px   bilateral left-right of the fly, into/out of screen
+      m.makeTranslation(pz, -py, px);
     } else {
       m.makeTranslation(1e6, 1e6, 1e6);
     }
@@ -214,10 +219,17 @@ async function loadNeurons() {
   instanced.instanceMatrix.needsUpdate = true;
   instanced.instanceColor.needsUpdate = true;
 
-  scene.add(instanced);
+  // Wrap the instanced mesh in a pivot so we can apply the same -0.3 rad Y
+  // rotation the corner fly uses — gives the brain a 3/4 pose from the fly
+  // camera direction instead of a pure side profile.
+  const brainPivot = new THREE.Group();
+  brainPivot.rotation.y = -0.3;
+  brainPivot.add(instanced);
+  scene.add(brainPivot);
   indexCount = n;
-  // Position camera so the whole brain fits.
-  camera.position.set(0, 0, 260);
+  // Camera position was set at module load (see top of file). We only tune
+  // the orbit limits here; moving the camera again would clobber the
+  // deliberately chosen fly-matching angle.
   controls.target.set(0, 0, 0);
   controls.minDistance = 20;
   controls.maxDistance = 800;

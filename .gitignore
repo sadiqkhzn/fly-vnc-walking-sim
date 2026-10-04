@@ -17,3 +17,8 @@ src/validation/figures/
 
 # MuJoCo logs
 *.mjl
+
+# Playwright + ad-hoc screenshots during viewer dev
+.playwright-mcp/
+v*.png
+viewer-*.png
