@@ -1,0 +1,36 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #050607;
+  color: #c8d1dc;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+}
+
+#scene {
+  position: fixed;
+  inset: 0;
+  display: block;
+}
+
+#hud {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  background: rgba(10, 12, 16, 0.72);
+  border: 1px solid #1a2029;
+  padding: 10px 14px;
+  min-width: 220px;
+  z-index: 10;
+  letter-spacing: 0.03em;
+}
+
+#hud .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 2px 0;
+}
+
+#hud .k { color: #6b7684; text-transform: uppercase; }
+#hud .v { color: #e7edf5; }

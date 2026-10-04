@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.DS_Store
+.ipynb_checkpoints/
+
+# Local data cache — connectome exports, trained readouts, episode recordings.
+# Nothing in data/ should be committed; it is reproducible from scripts/.
+data/*
+!data/.gitkeep
+
+# Validation figure outputs
+src/validation/figures/
+
+# MuJoCo logs
+*.mjl

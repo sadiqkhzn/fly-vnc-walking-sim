@@ -1,0 +1,18 @@
+neuprint-python>=0.4.25
+torch>=2.2
+numpy>=1.26
+scipy>=1.12
+pandas>=2.2
+mujoco>=3.1
+dm-control>=1.0.20
+fastapi>=0.110
+uvicorn[standard]>=0.29
+websockets>=12.0
+pydantic>=2.6
+matplotlib>=3.8
+tqdm>=4.66
+python-dotenv>=1.0
+
+# NeuroMechFly 2 is installed from source, not PyPI.
+# Pin a specific commit after first successful setup to avoid API drift:
+# pip install git+https://github.com/NeLy-EPFL/flygym.git@<commit-hash>

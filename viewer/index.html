@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fly VNC — live</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="hud">
+      <div class="row"><span class="k">dataset</span><span class="v">male CNS v1 (Sept 2026)</span></div>
+      <div class="row"><span class="k">neurons</span><span class="v" id="neuron-count">—</span></div>
+      <div class="row"><span class="k">t</span><span class="v" id="sim-t">0 ms</span></div>
+      <div class="row"><span class="k">gait</span><span class="v" id="gait-state">idle</span></div>
+    </div>
+    <canvas id="scene"></canvas>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>
