@@ -55,108 +55,214 @@ let indexCount = 0;
 let scaleFactor = 1;
 
 // -------------- corner fly --------------
-// A separate THREE.Scene (overlay) with a procedural fly:
-//   - ellipsoid body (segmented coloration: head/thorax/abdomen)
-//   - sphere head with a mini point-cloud "brain" that pulses with firing rate
-//   - two flat wings that buzz (rotation about the attachment axis at ~200 Hz
-//     wall-clock, visually clamped so the browser can keep up)
-//   - six leg segments (thin cylinders) so you can tell it's a hexapod
+// Procedural Drosophila-ish fly, lit by a key + rim light so it reads 3D.
+//
+// Anatomy (fly convention: +Z = forward, +Y = up):
+//   head  (small sphere + 2 compound eyes + 2 antennae)
+//   thorax (slightly wider than head, iridescent dark blue-green)
+//   abdomen (3 tapered segments, dark with lighter rings between)
+//   wings  (teardrop shape, translucent, hinged above thorax; buzz at ~22 Hz)
+//   6 legs (coxa + femur + tibia, jointed for proper bend)
+//
+// All sized in the fly's local units; the camera framing fits the whole fly.
 const flyScene = new THREE.Scene();
-const flyCamera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
-flyCamera.position.set(0, 1.5, 6);
-flyCamera.lookAt(0, 0, 0);
+const flyCamera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
+flyCamera.position.set(5.5, 3.5, 7.5);
+flyCamera.lookAt(0, -0.2, -1.6);
 
-let flyWings = [];        // two wing meshes we animate
-let flyBrainGlow = null;  // mini point cloud inside the head
+// Lighting — hemisphere for ambient skydome + key for form + rim for silhouette
+flyScene.add(new THREE.HemisphereLight(0xffffff, 0x1a1218, 0.9));
+const key = new THREE.DirectionalLight(0xfff4e2, 1.3);
+key.position.set(4, 5, 4);
+flyScene.add(key);
+const rim = new THREE.DirectionalLight(0x8ac4ff, 0.7);
+rim.position.set(-4, 2, -3);
+flyScene.add(rim);
+
+let flyWings = [];
+let flyBrainGlow = null;
 let flyBrainGlowBase = 0.2;
 
+// Coordinate convention used below (matches many fly viewers):
+//   +Z  → anterior (head direction)
+//   -Z  → posterior (abdomen)
+//   +Y  → dorsal (up)
+// Fly is laid out ~5 units long so lights/distances read nicely.
 function buildFly() {
   const g = new THREE.Group();
 
-  // Thorax (middle segment of the body)
-  const thorax = new THREE.Mesh(
-    new THREE.SphereGeometry(0.55, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0x3a2a1a })
-  );
-  thorax.scale.set(1, 0.9, 1.1);
+  // --- Materials (shared) ---
+  const matChitin = new THREE.MeshStandardMaterial({
+    color: 0x4a3524, roughness: 0.5, metalness: 0.3,  // mid-brown exoskeleton
+  });
+  const matChitinDark = new THREE.MeshStandardMaterial({
+    color: 0x2a1d14, roughness: 0.55, metalness: 0.25,
+  });
+  const matAbd = new THREE.MeshStandardMaterial({
+    color: 0x3d2a1b, roughness: 0.5, metalness: 0.3,
+  });
+  const matRing = new THREE.MeshStandardMaterial({
+    color: 0xb08a4a, roughness: 0.55, metalness: 0.4,  // golden ring between abd segments
+  });
+  const matLeg = new THREE.MeshStandardMaterial({
+    color: 0x1f1510, roughness: 0.75, metalness: 0.1,
+  });
+
+  // Translucent head with clearcoat so the mini-brain inside is visible
+  const matHead = new THREE.MeshPhysicalMaterial({
+    color: 0x8f6c4d, roughness: 0.3, metalness: 0.15,
+    transparent: true, opacity: 0.32, clearcoat: 0.75, clearcoatRoughness: 0.3,
+    depthWrite: false,
+  });
+
+  // Compound eyes — reddish, slightly emissive
+  const matEye = new THREE.MeshStandardMaterial({
+    color: 0xa02020, roughness: 0.3, metalness: 0.25,
+    emissive: 0x401010, emissiveIntensity: 0.4,
+  });
+
+  // Iridescent wings — the single trick that makes a procedural fly look alive
+  const matWing = new THREE.MeshPhysicalMaterial({
+    color: 0xaad4f0, roughness: 0.15, metalness: 0.0,
+    transparent: true, opacity: 0.36, side: THREE.DoubleSide,
+    iridescence: 0.95, iridescenceIOR: 1.3,
+    depthWrite: false,
+  });
+
+  // --- THORAX (origin) ---
+  const thorax = new THREE.Mesh(new THREE.SphereGeometry(1.0, 40, 32), matChitin);
+  thorax.scale.set(1.15, 1.0, 1.3);
+  thorax.position.set(0, 0, -1.0);
   g.add(thorax);
 
-  // Abdomen (rear)
-  const abdomen = new THREE.Mesh(
-    new THREE.SphereGeometry(0.45, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0x2a1a10 })
-  );
-  abdomen.position.set(0, 0, -0.95);
-  abdomen.scale.set(0.9, 0.8, 1.6);
-  g.add(abdomen);
-
-  // Head
-  const head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.42, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0x201510 })
-  );
-  head.position.set(0, 0.05, 0.9);
-  head.scale.set(1.1, 1.0, 0.95);
+  // --- HEAD ---
+  const headZ = 0.65;
+  const headPos = new THREE.Vector3(0, 0.08, headZ);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.95, 40, 32), matHead);
+  head.position.copy(headPos);
   g.add(head);
 
-  // Compound eyes
+  // Compound eyes (hemispheres on the sides, tilted outward)
   for (const sx of [-1, 1]) {
     const eye = new THREE.Mesh(
-      new THREE.SphereGeometry(0.21, 10, 8),
-      new THREE.MeshBasicMaterial({ color: 0x8a1a1a })
+      new THREE.SphereGeometry(0.42, 32, 24, 0, Math.PI * 2, 0, Math.PI * 0.6),
+      matEye
     );
-    eye.position.set(sx * 0.3, 0.08, 1.08);
+    eye.position.set(sx * 0.72, 0.08, headZ + 0.1);
+    eye.lookAt(sx * 4, 0.1, headZ + 1.2);
+    eye.rotateX(-Math.PI / 2);
     g.add(eye);
   }
 
-  // Mini "brain" point cloud inside the head — pulses with firing rate.
-  // 60 points inside a small sphere → read as a little glowing blob.
-  const brainPts = 60;
+  // Antennae — a short pedicel bump + a thin arista bristle, one per side
+  for (const sx of [-1, 1]) {
+    const ped = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), matChitinDark);
+    ped.position.set(sx * 0.18, 0.42, headZ + 0.4);
+    g.add(ped);
+    const arista = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.03, 0.4, 8), matChitinDark
+    );
+    arista.position.set(sx * 0.22, 0.6, headZ + 0.55);
+    arista.rotation.x = Math.PI / 3;
+    arista.rotation.z = -sx * 0.5;
+    g.add(arista);
+  }
+
+  // Proboscis (mouthparts): short tapered cylinder jutting down and forward
+  const proboscis = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 0.13, 0.55, 12), matChitinDark
+  );
+  proboscis.position.set(0, -0.6, headZ + 0.3);
+  proboscis.rotation.x = 0.35;
+  g.add(proboscis);
+
+  // --- MINI BRAIN inside the head (same role as the main scene point cloud) ---
+  const brainPts = 90;
   const brainGeo = new THREE.BufferGeometry();
   const pos = new Float32Array(brainPts * 3);
   for (let i = 0; i < brainPts; i++) {
-    // Rejection-sampled unit sphere
     let x, y, z, r2;
-    do { x = Math.random()*2 - 1; y = Math.random()*2 - 1; z = Math.random()*2 - 1; r2 = x*x+y*y+z*z; } while (r2 > 1);
-    const s = 0.22;
+    do {
+      x = Math.random() * 2 - 1; y = Math.random() * 2 - 1; z = Math.random() * 2 - 1;
+      r2 = x*x + y*y + z*z;
+    } while (r2 > 1);
+    const s = 0.5;
     pos[i*3] = x * s; pos[i*3 + 1] = y * s; pos[i*3 + 2] = z * s;
   }
   brainGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  const brainMat = new THREE.PointsMaterial({ color: 0x5fd3ff, size: 0.045, transparent: true, opacity: 0.85 });
+  const brainMat = new THREE.PointsMaterial({
+    color: 0x5fd3ff, size: 0.08, transparent: true, opacity: 0.85,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
   flyBrainGlow = new THREE.Points(brainGeo, brainMat);
-  flyBrainGlow.position.copy(head.position);
+  flyBrainGlow.position.copy(headPos);
   g.add(flyBrainGlow);
 
-  // Wings (two flat planes attached at the thorax, hinged at inner edge)
-  const wingMat = new THREE.MeshBasicMaterial({
-    color: 0xaad7ff, transparent: true, opacity: 0.25, side: THREE.DoubleSide,
-  });
+  // --- ABDOMEN: ellipsoid with 4 raised torus rings for tergite segmentation ---
+  const abdomen = new THREE.Mesh(new THREE.SphereGeometry(1.0, 40, 32), matAbd);
+  abdomen.scale.set(0.95, 0.88, 1.9);
+  abdomen.position.set(0, -0.2, -3.1);
+  g.add(abdomen);
+
+  for (let i = 0; i < 4; i++) {
+    const ringR = 0.78 - i * 0.11;
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(ringR, 0.035, 8, 48), matRing
+    );
+    ring.position.set(0, -0.2, -2.3 - i * 0.55);
+    ring.scale.set(1.1, 1.0, 1);  // squish to match abdomen cross-section
+    g.add(ring);
+  }
+
+  // --- WINGS (two) — iridescent teardrop, hinged above thorax ---
+  const wingShape = new THREE.Shape();
+  wingShape.moveTo(0, 0);
+  wingShape.bezierCurveTo(1.2, 0.6, 3.2, 0.9, 4.2, 0.2);
+  wingShape.bezierCurveTo(3.6, -0.5, 1.8, -0.7, 0, -0.25);
+  const wingGeo = new THREE.ShapeGeometry(wingShape, 24);
+
   for (const sx of [-1, 1]) {
     const pivot = new THREE.Group();
-    pivot.position.set(sx * 0.2, 0.28, -0.15);
-    const wing = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.55), wingMat);
-    // Place the wing to the side of the pivot (shift along x) so the pivot rotation hinges correctly.
-    wing.position.set(sx * 0.75, 0, -0.2);
-    wing.rotation.y = sx > 0 ? -0.15 : 0.15;
+    pivot.position.set(sx * 0.55, 0.75, -1.1);
+    const wing = new THREE.Mesh(wingGeo, matWing);
+    wing.rotation.x = -Math.PI / 2;
+    wing.scale.x = sx;
+    wing.rotation.z = sx * 0.25;
     pivot.add(wing);
     g.add(pivot);
     flyWings.push({ pivot, sx });
   }
 
-  // Six legs — thin cylinders arranged in a hexapod stance
-  const legMat = new THREE.MeshBasicMaterial({ color: 0x1a1208 });
-  const legPositions = [
-    [-0.55, -0.35,  0.35], [-0.55, -0.35, -0.1], [-0.55, -0.35, -0.55],  // L front/mid/hind
-    [ 0.55, -0.35,  0.35], [ 0.55, -0.35, -0.1], [ 0.55, -0.35, -0.55],  // R
-  ];
-  for (const [x, y, z] of legPositions) {
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.9, 6), legMat);
-    leg.position.set(x, y - 0.35, z);
-    leg.rotation.z = x < 0 ? -0.6 : 0.6;
-    g.add(leg);
+  // --- LEGS: 6, each with hip → femur → knee → tibia (two cylinders, two groups) ---
+  for (const sx of [-1, 1]) {
+    [-0.3, -1.1, -2.0].forEach((rowZ, i) => {
+      const hip = new THREE.Group();
+      hip.position.set(sx * 0.9, -0.6, rowZ);
+      g.add(hip);
+
+      const femur = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.055, 0.04, 1.3, 8), matLeg
+      );
+      femur.position.set(sx * 0.55, 0.1, 0);
+      femur.rotation.z = sx * 1.1;
+      femur.rotation.y = (i - 1) * 0.45 * sx;
+      hip.add(femur);
+
+      const knee = new THREE.Group();
+      knee.position.set(sx * 1.15, 0.42, (i - 1) * 0.5);
+      hip.add(knee);
+
+      const tibia = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.023, 1.75, 8), matLeg
+      );
+      tibia.position.set(sx * 0.22, -0.85, 0);
+      tibia.rotation.z = sx * 0.25;
+      knee.add(tibia);
+    });
   }
 
-  g.rotation.y = -0.2;  // slight 3/4 view
+  g.rotation.y = -0.35;
+  g.position.y = 0.3;
   flyScene.add(g);
   return g;
 }
@@ -318,13 +424,13 @@ for (const btn of document.querySelectorAll("#controls button[data-action='reset
 
 // -------------- animation loop --------------
 function animateFly(elapsedS) {
-  // Wing buzz: ~200 Hz in real flies; visually cap at ~25 Hz so we don't just
-  // see a blur. Phase-locked between wings so it reads as "beating together".
+  // Wing buzz: real flies ~200 Hz; visual cap at ~22 Hz. Flap axis is Z
+  // (longitudinal) so wings go up/down relative to the thorax.
   const buzzHz = 22;
-  const amp = 0.55;
+  const amp = 0.75;
   const theta = Math.sin(elapsedS * buzzHz * 2 * Math.PI) * amp;
   for (const w of flyWings) {
-    w.pivot.rotation.z = w.sx * (0.1 + theta);
+    w.pivot.rotation.z = w.sx * (0.05 + theta * 0.6);
   }
 
   // Mini-brain intensity tracks the main-sim firing rate smoothly.
@@ -381,9 +487,11 @@ function tick() {
   renderer.setScissorTest(false);
   renderer.render(scene, camera);
 
-  const flySize = Math.min(260, window.innerWidth * 0.22);
-  const flyX = window.innerWidth - flySize - 16;
-  const flyY = 240;  // leave headroom for the footer line
+  // Bottom-right corner. flyY in WebGL coords = pixels up from bottom.
+  // We leave 36px for the footer, then anchor the fly directly above it.
+  const flySize = Math.min(300, window.innerWidth * 0.22);
+  const flyX = window.innerWidth - flySize - 20;
+  const flyY = 36;
   renderer.setViewport(flyX, flyY, flySize, flySize);
   renderer.setScissor(flyX, flyY, flySize, flySize);
   renderer.setScissorTest(true);
