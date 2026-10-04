@@ -7,6 +7,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { createFly } from "./fly_model.js";
 
 // -------------- role → base color (RGB tuple) --------------
 const COLORS = {
@@ -30,13 +31,17 @@ renderer.autoClear = false;  // we composite main scene + corner fly in the same
 
 const scene = new THREE.Scene();
 // Fog adds depth: distant neurons fade toward the background. Range tuned
-// to brain radius (loadNeurons scales so maxR → 100 world units).
-scene.fog = new THREE.Fog(0x050607, 150, 420);
+// to brain radius (loadNeurons scales so maxR → 100 world units) with
+// enough slack that at side-profile viewing distances most of the volume
+// is still legible.
+scene.fog = new THREE.Fog(0x050607, 260, 650);
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 5000);
-// Start at an angled 3D view (anterior-dorsal perspective) so the volume
-// reads as 3D from first paint, instead of looking like a flat drawing.
-camera.position.set(140, 90, 220);
+// Camera angle matches the corner fly's view direction so the main brain is
+// shown in the same anatomical pose (3/4 profile, slight tilt from both the
+// vertical and the horizontal). The corner fly uses position (5.5, 3.5, 7.5)
+// for a ~5 unit model; scaled to the brain radius (~100) that's (165, 105, 225).
+camera.position.set(165, 105, 225);
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
@@ -83,191 +88,41 @@ let flyWings = [];
 let flyBrainGlow = null;
 let flyBrainGlowBase = 0.2;
 
-// Coordinate convention used below (matches many fly viewers):
-//   +Z  → anterior (head direction)
-//   -Z  → posterior (abdomen)
-//   +Y  → dorsal (up)
-// Fly is laid out ~5 units long so lights/distances read nicely.
-function buildFly() {
-  const g = new THREE.Group();
+// --- Fly avatar ---
+// The procedural fly is imported from fly_model.js so the viewer file stays
+// focused on brain spike streaming. The imported createFly() returns:
+//   group       — the whole fly as a THREE.Group (origin at thorax)
+//   wingPivots  — [THREE.Group, THREE.Group] for the wing-buzz animation
+//   headGroup   — empty group fixed at the head position; we attach the
+//                 mini-brain point cloud as a child so it stays glued to the head
+//   eyes        — [Mesh, Mesh] in case we want to pulse eye glow with firing
+const fly = createFly();
+flyWings = fly.wingPivots.map((pivot, i) => ({ pivot, sx: i === 0 ? 1 : -1 }));
+const flyGroup = fly.group;
+flyScene.add(flyGroup);
 
-  // --- Materials (shared) ---
-  const matChitin = new THREE.MeshStandardMaterial({
-    color: 0x4a3524, roughness: 0.5, metalness: 0.3,  // mid-brown exoskeleton
-  });
-  const matChitinDark = new THREE.MeshStandardMaterial({
-    color: 0x2a1d14, roughness: 0.55, metalness: 0.25,
-  });
-  const matAbd = new THREE.MeshStandardMaterial({
-    color: 0x3d2a1b, roughness: 0.5, metalness: 0.3,
-  });
-  const matRing = new THREE.MeshStandardMaterial({
-    color: 0xb08a4a, roughness: 0.55, metalness: 0.4,  // golden ring between abd segments
-  });
-  const matLeg = new THREE.MeshStandardMaterial({
-    color: 0x1f1510, roughness: 0.75, metalness: 0.1,
-  });
-
-  // Translucent head with clearcoat so the mini-brain inside is visible
-  const matHead = new THREE.MeshPhysicalMaterial({
-    color: 0x8f6c4d, roughness: 0.3, metalness: 0.15,
-    transparent: true, opacity: 0.32, clearcoat: 0.75, clearcoatRoughness: 0.3,
-    depthWrite: false,
-  });
-
-  // Compound eyes — reddish, slightly emissive
-  const matEye = new THREE.MeshStandardMaterial({
-    color: 0xa02020, roughness: 0.3, metalness: 0.25,
-    emissive: 0x401010, emissiveIntensity: 0.4,
-  });
-
-  // Iridescent wings — the single trick that makes a procedural fly look alive
-  const matWing = new THREE.MeshPhysicalMaterial({
-    color: 0xaad4f0, roughness: 0.15, metalness: 0.0,
-    transparent: true, opacity: 0.36, side: THREE.DoubleSide,
-    iridescence: 0.95, iridescenceIOR: 1.3,
-    depthWrite: false,
-  });
-
-  // --- THORAX (origin) ---
-  const thorax = new THREE.Mesh(new THREE.SphereGeometry(1.0, 40, 32), matChitin);
-  thorax.scale.set(1.15, 1.0, 1.3);
-  thorax.position.set(0, 0, -1.0);
-  g.add(thorax);
-
-  // --- HEAD ---
-  const headZ = 0.65;
-  const headPos = new THREE.Vector3(0, 0.08, headZ);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.95, 40, 32), matHead);
-  head.position.copy(headPos);
-  g.add(head);
-
-  // Compound eyes (hemispheres on the sides, tilted outward)
-  for (const sx of [-1, 1]) {
-    const eye = new THREE.Mesh(
-      new THREE.SphereGeometry(0.42, 32, 24, 0, Math.PI * 2, 0, Math.PI * 0.6),
-      matEye
-    );
-    eye.position.set(sx * 0.72, 0.08, headZ + 0.1);
-    eye.lookAt(sx * 4, 0.1, headZ + 1.2);
-    eye.rotateX(-Math.PI / 2);
-    g.add(eye);
-  }
-
-  // Antennae — a short pedicel bump + a thin arista bristle, one per side
-  for (const sx of [-1, 1]) {
-    const ped = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), matChitinDark);
-    ped.position.set(sx * 0.18, 0.42, headZ + 0.4);
-    g.add(ped);
-    const arista = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.02, 0.03, 0.4, 8), matChitinDark
-    );
-    arista.position.set(sx * 0.22, 0.6, headZ + 0.55);
-    arista.rotation.x = Math.PI / 3;
-    arista.rotation.z = -sx * 0.5;
-    g.add(arista);
-  }
-
-  // Proboscis (mouthparts): short tapered cylinder jutting down and forward
-  const proboscis = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 0.13, 0.55, 12), matChitinDark
-  );
-  proboscis.position.set(0, -0.6, headZ + 0.3);
-  proboscis.rotation.x = 0.35;
-  g.add(proboscis);
-
-  // --- MINI BRAIN inside the head (same role as the main scene point cloud) ---
-  const brainPts = 90;
-  const brainGeo = new THREE.BufferGeometry();
-  const pos = new Float32Array(brainPts * 3);
-  for (let i = 0; i < brainPts; i++) {
+// Mini brain attached to the head group so it tracks any head motion.
+(function attachMiniBrain() {
+  const n = 110;
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
     let x, y, z, r2;
     do {
       x = Math.random() * 2 - 1; y = Math.random() * 2 - 1; z = Math.random() * 2 - 1;
       r2 = x*x + y*y + z*z;
     } while (r2 > 1);
-    const s = 0.5;
+    const s = 0.22;
     pos[i*3] = x * s; pos[i*3 + 1] = y * s; pos[i*3 + 2] = z * s;
   }
-  brainGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  const brainMat = new THREE.PointsMaterial({
-    color: 0x5fd3ff, size: 0.08, transparent: true, opacity: 0.85,
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({
+    color: 0x5fd3ff, size: 0.06, transparent: true, opacity: 0.85,
     blending: THREE.AdditiveBlending, depthWrite: false,
   });
-  flyBrainGlow = new THREE.Points(brainGeo, brainMat);
-  flyBrainGlow.position.copy(headPos);
-  g.add(flyBrainGlow);
-
-  // --- ABDOMEN: ellipsoid with 4 raised torus rings for tergite segmentation ---
-  const abdomen = new THREE.Mesh(new THREE.SphereGeometry(1.0, 40, 32), matAbd);
-  abdomen.scale.set(0.95, 0.88, 1.9);
-  abdomen.position.set(0, -0.2, -3.1);
-  g.add(abdomen);
-
-  for (let i = 0; i < 4; i++) {
-    const ringR = 0.78 - i * 0.11;
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(ringR, 0.035, 8, 48), matRing
-    );
-    ring.position.set(0, -0.2, -2.3 - i * 0.55);
-    ring.scale.set(1.1, 1.0, 1);  // squish to match abdomen cross-section
-    g.add(ring);
-  }
-
-  // --- WINGS (two) — iridescent teardrop, hinged above thorax ---
-  const wingShape = new THREE.Shape();
-  wingShape.moveTo(0, 0);
-  wingShape.bezierCurveTo(1.2, 0.6, 3.2, 0.9, 4.2, 0.2);
-  wingShape.bezierCurveTo(3.6, -0.5, 1.8, -0.7, 0, -0.25);
-  const wingGeo = new THREE.ShapeGeometry(wingShape, 24);
-
-  for (const sx of [-1, 1]) {
-    const pivot = new THREE.Group();
-    pivot.position.set(sx * 0.55, 0.75, -1.1);
-    const wing = new THREE.Mesh(wingGeo, matWing);
-    wing.rotation.x = -Math.PI / 2;
-    wing.scale.x = sx;
-    wing.rotation.z = sx * 0.25;
-    pivot.add(wing);
-    g.add(pivot);
-    flyWings.push({ pivot, sx });
-  }
-
-  // --- LEGS: 6, each with hip → femur → knee → tibia (two cylinders, two groups) ---
-  for (const sx of [-1, 1]) {
-    [-0.3, -1.1, -2.0].forEach((rowZ, i) => {
-      const hip = new THREE.Group();
-      hip.position.set(sx * 0.9, -0.6, rowZ);
-      g.add(hip);
-
-      const femur = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.055, 0.04, 1.3, 8), matLeg
-      );
-      femur.position.set(sx * 0.55, 0.1, 0);
-      femur.rotation.z = sx * 1.1;
-      femur.rotation.y = (i - 1) * 0.45 * sx;
-      hip.add(femur);
-
-      const knee = new THREE.Group();
-      knee.position.set(sx * 1.15, 0.42, (i - 1) * 0.5);
-      hip.add(knee);
-
-      const tibia = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.04, 0.023, 1.75, 8), matLeg
-      );
-      tibia.position.set(sx * 0.22, -0.85, 0);
-      tibia.rotation.z = sx * 0.25;
-      knee.add(tibia);
-    });
-  }
-
-  g.rotation.y = -0.35;
-  g.position.y = 0.3;
-  flyScene.add(g);
-  return g;
-}
-
-const flyGroup = buildFly();
+  flyBrainGlow = new THREE.Points(geo, mat);
+  fly.headGroup.add(flyBrainGlow);
+})();
 
 let totalSpikesInWindow = 0;
 let lastRateT = performance.now();
@@ -347,7 +202,10 @@ async function loadNeurons() {
       const px = (d.x - cx) * scaleFactor;
       const py = (d.y - cy) * scaleFactor;
       const pz = (d.z - cz) * scaleFactor;
-      m.makeTranslation(px, -pz, -py);
+      // Axis mapping chosen so the brain faces the camera in the same
+      // orientation as the corner-fly reference: anatomical dorsal → +Y (up),
+      // anatomical anterior → +Z (toward viewer), anatomical left-right → X.
+      m.makeTranslation(px, -py, -pz);
     } else {
       m.makeTranslation(1e6, 1e6, 1e6);
     }
@@ -444,8 +302,10 @@ function animateFly(elapsedS) {
     flyBrainGlow.material.size = 0.035 + flyBrainGlowBase * 0.03;
   }
 
-  // Gentle idle sway for the whole fly
-  flyGroup.rotation.y = -0.2 + Math.sin(elapsedS * 0.5) * 0.07;
+  // Gentle idle sway for the whole fly. The imported model sets its own baseline
+  // rotation.y = -0.3; we add a small sinusoidal perturbation on top so the fly
+  // breathes without jumping to a different stable orientation.
+  flyGroup.rotation.y = -0.3 + Math.sin(elapsedS * 0.5) * 0.06;
   flyGroup.position.y = Math.sin(elapsedS * 1.2) * 0.05;
 }
 
@@ -488,10 +348,11 @@ function tick() {
   renderer.render(scene, camera);
 
   // Bottom-right corner. flyY in WebGL coords = pixels up from bottom.
-  // We leave 36px for the footer, then anchor the fly directly above it.
-  const flySize = Math.min(300, window.innerWidth * 0.22);
-  const flyX = window.innerWidth - flySize - 20;
-  const flyY = 36;
+  // Give the fly extra right-side padding so its abdomen isn't clipped by
+  // the viewport edge, and keep the footer line (36 px) clear.
+  const flySize = Math.min(320, window.innerWidth * 0.24);
+  const flyX = window.innerWidth - flySize - 36;
+  const flyY = 44;
   renderer.setViewport(flyX, flyY, flySize, flySize);
   renderer.setScissor(flyX, flyY, flySize, flySize);
   renderer.setScissorTest(true);
