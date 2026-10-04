@@ -7,13 +7,51 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <div id="hud">
-      <div class="row"><span class="k">dataset</span><span class="v">male CNS v1 (Sept 2026)</span></div>
-      <div class="row"><span class="k">neurons</span><span class="v" id="neuron-count">—</span></div>
-      <div class="row"><span class="k">t</span><span class="v" id="sim-t">0 ms</span></div>
-      <div class="row"><span class="k">gait</span><span class="v" id="gait-state">idle</span></div>
-    </div>
     <canvas id="scene"></canvas>
+
+    <div id="hud">
+      <div class="title">
+        <span class="dot"></span>
+        <span>fly VNC · live</span>
+      </div>
+      <div class="row"><span class="k">dataset</span><span class="v" id="m-dataset">—</span></div>
+      <div class="row"><span class="k">neurons</span><span class="v" id="m-neurons">—</span></div>
+      <div class="row"><span class="k">edges</span><span class="v" id="m-edges">—</span></div>
+      <div class="row"><span class="k">sim t</span><span class="v" id="m-time">0 ms</span></div>
+      <div class="row"><span class="k">tick rate</span><span class="v" id="m-rate">—</span></div>
+      <div class="row"><span class="k">firing</span><span class="v" id="m-firing">— Hz</span></div>
+      <div class="row"><span class="k">drive</span><span class="v" id="m-drive">silence</span></div>
+    </div>
+
+    <div id="controls">
+      <div class="section">drive</div>
+      <button data-drive="silence">silence</button>
+      <button data-drive="mdn">MDN (walk)</button>
+      <button data-drive="dnp09">DNp09 (stop)</button>
+      <button data-drive="mdn+dnp09">MDN + DNp09</button>
+      <div class="section">sim</div>
+      <button data-action="reset">reset t = 0</button>
+    </div>
+
+    <div id="legend">
+      <div><span class="swatch cmd"></span>command DN (MDN · DNp09)</div>
+      <div><span class="swatch dn"></span>descending</div>
+      <div><span class="swatch motor"></span>motor</div>
+      <div><span class="swatch local"></span>local VNC</div>
+    </div>
+
+    <div id="footer">
+      male-cns:v1.0 (Sept 2026) · 24,115 neurons · LIF 1 ms tick · spikes streamed @ 50 Hz
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
     <script type="module" src="main.js"></script>
   </body>
 </html>
